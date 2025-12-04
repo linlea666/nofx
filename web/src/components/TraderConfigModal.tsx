@@ -28,7 +28,7 @@ const defaultCopyTradingConfig: CopyTradingConfig = {
   sync_margin_mode: true,
 }
 
-interface TraderConfigData {
+interface TraderFormData {
   trader_id?: string
   trader_name: string
   ai_model: string
@@ -50,9 +50,9 @@ interface TraderConfigData {
 }
 
 interface TraderConfigModalProps {
-  isOpen: boolean
+	isOpen: boolean
   onClose: () => void
-  traderData?: TraderConfigData | null
+	traderData?: TraderFormData | null
   isEditMode?: boolean
   availableModels?: AIModel[]
   availableExchanges?: Exchange[]
@@ -69,7 +69,7 @@ export function TraderConfigModal({
   onSave,
 }: TraderConfigModalProps) {
   const { language } = useLanguage()
-  const [formData, setFormData] = useState<TraderConfigData>({
+	const [formData, setFormData] = useState<TraderFormData>({
     trader_name: '',
     ai_model: '',
     exchange_id: '',
@@ -209,7 +209,7 @@ export function TraderConfigModal({
 
   if (!isOpen) return null
 
-  const handleInputChange = (field: keyof TraderConfigData, value: any) => {
+  const handleInputChange = (field: keyof TraderFormData, value: any) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
 
     // 如果是直接编辑trading_symbols，同步更新selectedCoins
