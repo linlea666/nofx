@@ -1,0 +1,61 @@
+package copytrading
+
+import (
+	"errors"
+	"net/http"
+	"time"
+)
+
+// SignalAction represents the normalized action type emitted by signal providers.
+type SignalAction string
+
+const (
+	ActionOpenLong  SignalAction = "open_long"
+	ActionOpenShort SignalAction = "open_short"
+	ActionCloseLong SignalAction = "close_long"
+	ActionCloseShort SignalAction = "close_short"
+)
+
+// Signal is the normalized structure describing a leader's fill event.
+type Signal struct {
+	Symbol        string
+	Action        SignalAction
+	NotionalUSD   float64   // Absolute fill size in USD
+	LeaderEquity  float64   // Leader account equity at the moment of fill
+	LeaderLeverage int
+	MarginMode    string    // "cross" or "isolated"
+	Timestamp     time.Time
+}
+
+// Provider defines the behaviour for any external signal source.
+type Provider interface {
+	Run(stopCh <-chan struct{}, out chan<- Signal) error
+}
+
+// Config contains shared initialization parameters for all providers.
+type Config struct {
+	Type         string
+	Identifier   string
+	PollInterval time.Duration
+	HTTPClient   *http.Client
+}
+
+// NewProvider constructs the correct Provider implementation based on the type field.
+func NewProvider(cfg Config) (Provider, error) {
+	if cfg.HTTPClient == nil {
+		cfg.HTTPClient = &http.Client{
+			Timeout: 10 * time.Second,
+		}
+	}
+	if cfg.PollInterval <= 0 {
+		cfg.PollInterval = 3 * time.Second
+	}
+	switch cfg.Type {
+	case "hyperliquid_wallet", "hyperliquid":
+		return newHyperliquidProvider(cfg.Identifier, cfg.PollInterval, cfg.HTTPClient), nil
+	case "okx_wallet", "okx":
+		return newOKXProvider(cfg.Identifier, cfg.PollInterval, cfg.HTTPClient), nil
+	default:
+		return nil, errors.New("unsupported signal source type")
+	}
+}

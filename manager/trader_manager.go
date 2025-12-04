@@ -367,6 +367,7 @@ func (tm *TraderManager) AddTraderFromDB(traderCfg *config.TraderRecord, aiModel
 		IsCrossMargin:         traderCfg.IsCrossMargin,
 		DefaultCoins:          defaultCoins,
 		TradingCoins:          tradingCoins,
+		SystemPromptTemplate:  traderCfg.SystemPromptTemplate,
 		SignalSourceType:      signalSourceType,
 		SignalSourceValue:     traderCfg.SignalSourceValue,
 		CopyTradingConfig:     copyConfig,

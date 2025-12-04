@@ -1,10 +1,12 @@
 package trader
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"math"
+	"nofx/copytrading"
 	"nofx/decision"
 	"nofx/logger"
 	"nofx/market"
@@ -347,23 +349,164 @@ func (at *AutoTrader) Stop() {
 
 // runCopyTradingLoop 复制交易模式（后续将接入真实信号监听）
 func (at *AutoTrader) runCopyTradingLoop() error {
-	defer func() {
-		at.isRunning = false
+	provider, err := copytrading.NewProvider(copytrading.Config{
+		Type:         at.signalSourceType,
+		Identifier:   at.signalSourceValue,
+		PollInterval: 3 * time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("初始化复制交易信号源失败: %w", err)
+	}
+
+	signalCh := make(chan copytrading.Signal, 128)
+	errCh := make(chan error, 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go func() {
+		errCh <- provider.Run(ctx.Done(), signalCh)
 	}()
 
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
+	log.Printf("🛰 [%s] 已接入复制信号源: %s (%s)", at.name, at.signalSourceType, at.signalSourceValue)
 
-	log.Printf("🛰 [%s] 正在等待外部信号源: %s (%s)", at.name, at.signalSourceType, at.signalSourceValue)
 	for {
 		select {
-		case <-ticker.C:
-			log.Printf("⌛ [%s] 复制交易同步中（信号源: %s）", at.name, at.signalSourceType)
+		case sig := <-signalCh:
+			if err := at.processCopySignal(sig); err != nil {
+				log.Printf("⚠️  复制交易执行失败: %v", err)
+			}
+		case err := <-errCh:
+			if err != nil {
+				log.Printf("❌ 复制信号服务异常退出: %v", err)
+				return err
+			}
+			return nil
 		case <-at.stopMonitorCh:
+			cancel()
 			log.Printf("⏹ [%s] 复制交易模式已停止", at.name)
 			return nil
 		}
 	}
+}
+
+func (at *AutoTrader) processCopySignal(sig copytrading.Signal) error {
+	cfg := at.copyTradingConfig
+	if sig.LeaderEquity <= 0 || sig.NotionalUSD <= 0 {
+		return nil
+	}
+
+	if cfg.FollowRatio <= 0 {
+		cfg.FollowRatio = 100
+	}
+
+	followerEquity, err := at.getFollowerEquity()
+	if err != nil {
+		return fmt.Errorf("获取账户净值失败: %w", err)
+	}
+	if followerEquity <= 0 {
+		return fmt.Errorf("账户净值为 0，无法执行复制交易")
+	}
+
+	proportion := sig.NotionalUSD / sig.LeaderEquity
+	if proportion <= 0 {
+		return nil
+	}
+
+	amountUSD := proportion * followerEquity * (cfg.FollowRatio / 100)
+	if amountUSD <= 0 {
+		return nil
+	}
+
+	if cfg.MinAmount > 0 && amountUSD < cfg.MinAmount {
+		log.Printf("📉 [%s] 忽略过小的复制金额 %.2f < %.2f", at.name, amountUSD, cfg.MinAmount)
+		return nil
+	}
+	if cfg.MaxAmount > 0 && amountUSD > cfg.MaxAmount {
+		amountUSD = cfg.MaxAmount
+	}
+
+	marketData, err := market.Get(sig.Symbol)
+	if err != nil {
+		return fmt.Errorf("获取市场价格失败: %w", err)
+	}
+	if marketData.CurrentPrice <= 0 {
+		return fmt.Errorf("无效的市场价格: %s", sig.Symbol)
+	}
+
+	quantity := amountUSD / marketData.CurrentPrice
+	if quantity <= 0 {
+		return nil
+	}
+
+	return at.executeCopyTrade(sig, quantity, cfg)
+}
+
+func (at *AutoTrader) executeCopyTrade(sig copytrading.Signal, quantity float64, cfg CopyTradingConfig) error {
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		return fmt.Errorf("获取持仓失败: %w", err)
+	}
+
+	longQty := getPositionQuantity(positions, sig.Symbol, "long")
+	shortQty := getPositionQuantity(positions, sig.Symbol, "short")
+
+	if cfg.SyncMarginMode && sig.MarginMode != "" {
+		isCross := strings.EqualFold(sig.MarginMode, "cross")
+		if err := at.trader.SetMarginMode(sig.Symbol, isCross); err != nil {
+			log.Printf("⚠️  设置保证金模式失败: %v", err)
+		}
+	}
+
+	leverage := at.defaultLeverageForSymbol(sig.Symbol)
+	if cfg.SyncLeverage && sig.LeaderLeverage > 0 {
+		leverage = sig.LeaderLeverage
+		if err := at.trader.SetLeverage(sig.Symbol, leverage); err != nil {
+			log.Printf("⚠️  设置杠杆失败: %v", err)
+		}
+	}
+
+	switch sig.Action {
+	case copytrading.ActionOpenLong:
+		hasPosition := longQty > 0
+		if hasPosition && !cfg.FollowAdd {
+			return nil
+		}
+		if !hasPosition && !cfg.FollowOpen {
+			return nil
+		}
+		_, err = at.trader.OpenLong(sig.Symbol, quantity, leverage)
+	case copytrading.ActionOpenShort:
+		hasPosition := shortQty > 0
+		if hasPosition && !cfg.FollowAdd {
+			return nil
+		}
+		if !hasPosition && !cfg.FollowOpen {
+			return nil
+		}
+		_, err = at.trader.OpenShort(sig.Symbol, quantity, leverage)
+	case copytrading.ActionCloseLong:
+		if !cfg.FollowReduce || longQty <= 0 {
+			return nil
+		}
+		qty := math.Min(longQty, quantity)
+		_, err = at.trader.CloseLong(sig.Symbol, qty)
+	case copytrading.ActionCloseShort:
+		if !cfg.FollowReduce || shortQty <= 0 {
+			return nil
+		}
+		qty := math.Min(shortQty, quantity)
+		_, err = at.trader.CloseShort(sig.Symbol, qty)
+	default:
+		return nil
+	}
+
+	if err != nil {
+		return err
+	}
+
+	log.Printf("📡 [%s] 已复制 %s %s, 数量=%.4f", at.name, sig.Symbol, sig.Action, quantity)
+	return nil
 }
 
 // runCycle 运行一个交易周期（使用AI全权决策）
@@ -1669,6 +1812,57 @@ func (at *AutoTrader) checkPositionDrawdown() {
 				symbol, side, currentPnLPct, peakPnLPct, drawdownPct)
 		}
 	}
+}
+
+func (at *AutoTrader) getFollowerEquity() (float64, error) {
+	balance, err := at.trader.GetBalance()
+	if err != nil {
+		return 0, err
+	}
+	totalWallet := 0.0
+	if val, ok := balance["totalWalletBalance"].(float64); ok {
+		totalWallet = val
+	} else if val, ok := balance["wallet_balance"].(float64); ok {
+		totalWallet = val
+	}
+	unrealized := 0.0
+	if val, ok := balance["totalUnrealizedProfit"].(float64); ok {
+		unrealized = val
+	} else if val, ok := balance["unrealized_profit"].(float64); ok {
+		unrealized = val
+	}
+	return totalWallet + unrealized, nil
+}
+
+func getPositionQuantity(positions []map[string]interface{}, symbol, side string) float64 {
+	for _, pos := range positions {
+		psSymbol, _ := pos["symbol"].(string)
+		psSide, _ := pos["side"].(string)
+		if !strings.EqualFold(psSymbol, symbol) || !strings.EqualFold(psSide, side) {
+			continue
+		}
+		if amt, ok := pos["positionAmt"].(float64); ok {
+			if amt < 0 {
+				return -amt
+			}
+			return amt
+		}
+	}
+	return 0
+}
+
+func (at *AutoTrader) defaultLeverageForSymbol(symbol string) int {
+	upper := strings.ToUpper(symbol)
+	if strings.HasPrefix(upper, "BTC") || strings.HasPrefix(upper, "ETH") {
+		if at.config.BTCETHLeverage > 0 {
+			return at.config.BTCETHLeverage
+		}
+		return 5
+	}
+	if at.config.AltcoinLeverage > 0 {
+		return at.config.AltcoinLeverage
+	}
+	return 5
 }
 
 // 紧急平仓函数
