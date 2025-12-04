@@ -400,10 +400,11 @@ func (at *AutoTrader) processCopySignal(sig copytrading.Signal) error {
 		cfg.FollowRatio = 100
 	}
 
-	followerEquity, err := at.getFollowerEquity()
+	accountSnapshot, err := at.getCopyAccountSnapshot()
 	if err != nil {
-		return fmt.Errorf("获取账户净值失败: %w", err)
+		return fmt.Errorf("获取账户数据失败: %w", err)
 	}
+	followerEquity := accountSnapshot.TotalBalance
 	if followerEquity <= 0 {
 		return fmt.Errorf("账户净值为 0，无法执行复制交易")
 	}
@@ -439,15 +440,47 @@ func (at *AutoTrader) processCopySignal(sig copytrading.Signal) error {
 		return nil
 	}
 
-	return at.executeCopyTrade(sig, quantity, cfg)
-}
-
-func (at *AutoTrader) executeCopyTrade(sig copytrading.Signal, quantity float64, cfg CopyTradingConfig) error {
 	positions, err := at.trader.GetPositions()
 	if err != nil {
 		return fmt.Errorf("获取持仓失败: %w", err)
 	}
+	accountSnapshot.PositionCount = len(positions)
 
+	execLog := []string{
+		fmt.Sprintf("信号源 %s(%s) -> %s %s, leaderEq=%.2f, notional=%.2f, followerEq=%.2f, ratio=%.2f%%, copyUSD=%.2f",
+			at.signalSourceValue, at.signalSourceType, sig.Symbol, sig.Action, sig.LeaderEquity, sig.NotionalUSD, followerEquity, cfg.FollowRatio, amountUSD),
+	}
+	leverage := at.defaultLeverageForSymbol(sig.Symbol)
+	if cfg.SyncLeverage && sig.LeaderLeverage > 0 {
+		leverage = sig.LeaderLeverage
+	}
+
+	actionRecord := logger.DecisionAction{
+		Action:    string(sig.Action),
+		Symbol:    sig.Symbol,
+		Quantity:  quantity,
+		Leverage:  leverage,
+		Timestamp: time.Now(),
+	}
+
+	err = at.executeCopyTrade(sig, quantity, cfg, positions, leverage)
+	if err != nil {
+		actionRecord.Error = err.Error()
+		actionRecord.Success = false
+		execLog = append(execLog, fmt.Sprintf("❌ 执行失败: %v", err))
+		at.logCopyDecision(accountSnapshot, actionRecord, execLog, false)
+		logger.Warnf("复制交易失败 [%s %s]: %v", sig.Symbol, sig.Action, err)
+		return err
+	}
+
+	actionRecord.Success = true
+	execLog = append(execLog, "✓ 执行成功")
+	at.logCopyDecision(accountSnapshot, actionRecord, execLog, true)
+
+	return nil
+}
+
+func (at *AutoTrader) executeCopyTrade(sig copytrading.Signal, quantity float64, cfg CopyTradingConfig, positions []map[string]interface{}, leverage int) error {
 	longQty := getPositionQuantity(positions, sig.Symbol, "long")
 	shortQty := getPositionQuantity(positions, sig.Symbol, "short")
 
@@ -458,13 +491,13 @@ func (at *AutoTrader) executeCopyTrade(sig copytrading.Signal, quantity float64,
 		}
 	}
 
-	leverage := at.defaultLeverageForSymbol(sig.Symbol)
 	if cfg.SyncLeverage && sig.LeaderLeverage > 0 {
-		leverage = sig.LeaderLeverage
 		if err := at.trader.SetLeverage(sig.Symbol, leverage); err != nil {
 			log.Printf("⚠️  设置杠杆失败: %v", err)
 		}
 	}
+
+	var err error
 
 	switch sig.Action {
 	case copytrading.ActionOpenLong:
@@ -1814,24 +1847,60 @@ func (at *AutoTrader) checkPositionDrawdown() {
 	}
 }
 
-func (at *AutoTrader) getFollowerEquity() (float64, error) {
+func (at *AutoTrader) getCopyAccountSnapshot() (logger.AccountSnapshot, error) {
 	balance, err := at.trader.GetBalance()
 	if err != nil {
-		return 0, err
+		return logger.AccountSnapshot{}, err
 	}
+
 	totalWallet := 0.0
 	if val, ok := balance["totalWalletBalance"].(float64); ok {
 		totalWallet = val
 	} else if val, ok := balance["wallet_balance"].(float64); ok {
 		totalWallet = val
 	}
+
 	unrealized := 0.0
 	if val, ok := balance["totalUnrealizedProfit"].(float64); ok {
 		unrealized = val
 	} else if val, ok := balance["unrealized_profit"].(float64); ok {
 		unrealized = val
 	}
-	return totalWallet + unrealized, nil
+
+	available := 0.0
+	if val, ok := balance["availableBalance"].(float64); ok {
+		available = val
+	} else if val, ok := balance["available_balance"].(float64); ok {
+		available = val
+	}
+
+	return logger.AccountSnapshot{
+		TotalBalance:          totalWallet + unrealized,
+		AvailableBalance:      available,
+		TotalUnrealizedProfit: unrealized,
+		InitialBalance:        at.initialBalance,
+	}, nil
+}
+
+func (at *AutoTrader) logCopyDecision(snapshot logger.AccountSnapshot, action logger.DecisionAction, execLog []string, success bool) {
+	record := &logger.DecisionRecord{
+		Timestamp:     time.Now(),
+		AccountState:  snapshot,
+		Decisions:     []logger.DecisionAction{action},
+		ExecutionLog:  execLog,
+		Success:       success,
+		CandidateCoins: []string{
+			fmt.Sprintf("signal:%s", at.signalSourceValue),
+		},
+	}
+	record.DecisionJSON = fmt.Sprintf(`{"mode":"copy","source":"%s","action":"%s","ratio":%.2f}`,
+		at.signalSourceValue, action.Action, at.copyTradingConfig.FollowRatio)
+	if !success {
+		record.ErrorMessage = action.Error
+	}
+	if err := at.decisionLogger.LogDecision(record); err != nil {
+		log.Printf("⚠️ 记录复制交易日志失败: %v", err)
+	}
 }
 
 func getPositionQuantity(positions []map[string]interface{}, symbol, side string) float64 {
