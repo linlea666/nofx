@@ -46,7 +46,7 @@ interface TraderFormData {
   scan_interval_minutes: number
   signal_source_type?: string
   signal_source_value?: string
-  copy_trading_config?: CopyTradingConfig
+  copy_trading_config?: CopyTradingConfig | null
 }
 
 interface TraderConfigModalProps {
