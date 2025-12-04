@@ -44,9 +44,9 @@ interface TraderFormData {
   use_oi_top: boolean
   initial_balance?: number // 可选：创建时不需要，编辑时使用
   scan_interval_minutes: number
-  signal_source_type: string
-  signal_source_value: string
-  copy_trading_config: CopyTradingConfig
+  signal_source_type?: string
+  signal_source_value?: string
+  copy_trading_config?: CopyTradingConfig
 }
 
 interface TraderConfigModalProps {
