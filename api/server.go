@@ -860,10 +860,37 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 		return
 	}
 
-	// 重新加载交易员到内存
-	err = s.traderManager.LoadUserTraders(s.database, userID)
-	if err != nil {
-		log.Printf("⚠️ 重新加载用户交易员到内存失败: %v", err)
+	// 如果交易员已在内存中，停止并移除旧实例，以便使用新配置重建
+	wasRunning := false
+	if loadedTrader, err := s.traderManager.GetTrader(traderID); err == nil {
+		if status := loadedTrader.GetStatus(); status != nil {
+			if running, ok := status["is_running"].(bool); ok && running {
+				wasRunning = true
+				loadedTrader.Stop()
+				_ = s.database.UpdateTraderStatus(userID, traderID, false)
+			}
+		}
+		s.traderManager.RemoveTrader(traderID)
+	}
+
+	// 重新加载交易员到内存（包含最新的信号源/复制交易配置）
+	if err := s.traderManager.LoadTraderByID(s.database, userID, traderID); err != nil {
+		log.Printf("⚠️ 重新加载交易员失败: %v", err)
+	}
+
+	// 如果之前在运行，使用新配置自动重启
+	if wasRunning {
+		if newTrader, err := s.traderManager.GetTrader(traderID); err == nil {
+			go func() {
+				log.Printf("▶️  更新后重启交易员 %s (%s)", traderID, newTrader.GetName())
+				if runErr := newTrader.Run(); runErr != nil {
+					log.Printf("❌ 交易员 %s 运行错误: %v", newTrader.GetName(), runErr)
+				}
+			}()
+			if err := s.database.UpdateTraderStatus(userID, traderID, true); err != nil {
+				log.Printf("⚠️  更新交易员运行状态失败: %v", err)
+			}
+		}
 	}
 
 	log.Printf("✓ 更新交易员成功: %s (模型: %s, 交易所: %s)", req.Name, req.AIModelID, req.ExchangeID)

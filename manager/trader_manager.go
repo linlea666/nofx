@@ -1032,102 +1032,20 @@ func (tm *TraderManager) LoadTraderByID(database *config.Database, userID, trade
 
 // loadSingleTrader 加载单个交易员（从现有代码提取的公共逻辑）
 func (tm *TraderManager) loadSingleTrader(traderCfg *config.TraderRecord, aiModelCfg *config.AIModelConfig, exchangeCfg *config.ExchangeConfig, coinPoolURL, oiTopURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, defaultCoins []string, database *config.Database, userID string) error {
-	// 处理交易币种列表
-	var tradingCoins []string
-	if traderCfg.TradingSymbols != "" {
-		// 解析逗号分隔的交易币种列表
-		symbols := strings.Split(traderCfg.TradingSymbols, ",")
-		for _, symbol := range symbols {
-			symbol = strings.TrimSpace(symbol)
-			if symbol != "" {
-				tradingCoins = append(tradingCoins, symbol)
-			}
-		}
-	}
-
-	// 如果没有指定交易币种，使用默认币种
-	if len(tradingCoins) == 0 {
-		tradingCoins = defaultCoins
-	}
-
-	// 根据交易员配置决定是否使用信号源
-	var effectiveCoinPoolURL string
-	if traderCfg.UseCoinPool && coinPoolURL != "" {
-		effectiveCoinPoolURL = coinPoolURL
-		log.Printf("✓ 交易员 %s 启用 COIN POOL 信号源: %s", traderCfg.Name, coinPoolURL)
-	}
-
-	// 构建AutoTraderConfig
-	traderConfig := trader.AutoTraderConfig{
-		ID:                   traderCfg.ID,
-		Name:                 traderCfg.Name,
-		AIModel:              aiModelCfg.Provider, // 使用provider作为模型标识
-		Exchange:             exchangeCfg.ID,      // 使用exchange ID
-		InitialBalance:       traderCfg.InitialBalance,
-		BTCETHLeverage:       traderCfg.BTCETHLeverage,
-		AltcoinLeverage:      traderCfg.AltcoinLeverage,
-		ScanInterval:         time.Duration(traderCfg.ScanIntervalMinutes) * time.Minute,
-		CoinPoolAPIURL:       effectiveCoinPoolURL,
-		CustomAPIURL:         aiModelCfg.CustomAPIURL,    // 自定义API URL
-		CustomModelName:      aiModelCfg.CustomModelName, // 自定义模型名称
-		UseQwen:              aiModelCfg.Provider == "qwen",
-		MaxDailyLoss:         maxDailyLoss,
-		MaxDrawdown:          maxDrawdown,
-		StopTradingTime:      time.Duration(stopTradingMinutes) * time.Minute,
-		IsCrossMargin:        traderCfg.IsCrossMargin,
-		DefaultCoins:         defaultCoins,
-		TradingCoins:         tradingCoins,
-		SystemPromptTemplate: traderCfg.SystemPromptTemplate, // 系统提示词模板
-		HyperliquidTestnet:   exchangeCfg.Testnet,            // Hyperliquid测试网
-	}
-
-	// 根据交易所类型设置API密钥
-	if exchangeCfg.ID == "binance" {
-		traderConfig.BinanceAPIKey = exchangeCfg.APIKey
-		traderConfig.BinanceSecretKey = exchangeCfg.SecretKey
-	} else if exchangeCfg.ID == "bybit" {
-		traderConfig.BybitAPIKey = exchangeCfg.APIKey
-		traderConfig.BybitSecretKey = exchangeCfg.SecretKey
-	} else if exchangeCfg.ID == "hyperliquid" {
-		traderConfig.HyperliquidPrivateKey = exchangeCfg.APIKey // hyperliquid用APIKey存储private key
-		traderConfig.HyperliquidWalletAddr = exchangeCfg.HyperliquidWalletAddr
-	} else if exchangeCfg.ID == "aster" {
-		traderConfig.AsterUser = exchangeCfg.AsterUser
-		traderConfig.AsterSigner = exchangeCfg.AsterSigner
-		traderConfig.AsterPrivateKey = exchangeCfg.AsterPrivateKey
-	} else if exchangeCfg.ID == "lighter" {
-		traderConfig.LighterPrivateKey = exchangeCfg.LighterPrivateKey
-		traderConfig.LighterWalletAddr = exchangeCfg.LighterWalletAddr
-		traderConfig.LighterTestnet = exchangeCfg.Testnet
-	}
-
-	// 根据AI模型设置API密钥
-	if aiModelCfg.Provider == "qwen" {
-		traderConfig.QwenKey = aiModelCfg.APIKey
-	} else if aiModelCfg.Provider == "deepseek" {
-		traderConfig.DeepSeekKey = aiModelCfg.APIKey
-	}
-
-	// 创建trader实例
-	at, err := trader.NewAutoTrader(traderConfig, database, userID)
-	if err != nil {
-		return fmt.Errorf("创建trader失败: %w", err)
-	}
-
-	// 设置自定义prompt（如果有）
-	if traderCfg.CustomPrompt != "" {
-		at.SetCustomPrompt(traderCfg.CustomPrompt)
-		at.SetOverrideBasePrompt(traderCfg.OverrideBasePrompt)
-		if traderCfg.OverrideBasePrompt {
-			log.Printf("✓ 已设置自定义交易策略prompt (覆盖基础prompt)")
-		} else {
-			log.Printf("✓ 已设置自定义交易策略prompt (补充基础prompt)")
-		}
-	}
-
-	tm.traders[traderCfg.ID] = at
-	log.Printf("✓ Trader '%s' (%s + %s) 已为用户加载到内存", traderCfg.Name, aiModelCfg.Provider, exchangeCfg.ID)
-	return nil
+	// 复用 addTraderFromDB，确保加载流程与系统启动时保持一致（包括信号源/复制配置等）
+	return tm.addTraderFromDB(
+		traderCfg,
+		aiModelCfg,
+		exchangeCfg,
+		coinPoolURL,
+		oiTopURL,
+		maxDailyLoss,
+		maxDrawdown,
+		stopTradingMinutes,
+		defaultCoins,
+		database,
+		userID,
+	)
 }
 
 // RemoveTrader 从内存中移除指定的trader（不影响数据库）
