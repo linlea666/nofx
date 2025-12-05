@@ -352,7 +352,7 @@ func (at *AutoTrader) runCopyTradingLoop() error {
 	provider, err := copytrading.NewProvider(copytrading.Config{
 		Type:         at.signalSourceType,
 		Identifier:   at.signalSourceValue,
-		PollInterval: 3 * time.Second,
+		PollInterval: at.copyPollInterval(),
 	})
 	if err != nil {
 		return fmt.Errorf("初始化复制交易信号源失败: %w", err)
@@ -387,6 +387,19 @@ func (at *AutoTrader) runCopyTradingLoop() error {
 			log.Printf("⏹ [%s] 复制交易模式已停止", at.name)
 			return nil
 		}
+	}
+}
+
+// copyPollInterval returns a short, provider-specific polling interval for copy trading
+// to keep it independent from the AI scan interval.
+func (at *AutoTrader) copyPollInterval() time.Duration {
+	switch at.signalSourceType {
+	case "hyperliquid_wallet":
+		return 3 * time.Second
+	case "okx_wallet":
+		return 6 * time.Second
+	default:
+		return 10 * time.Second
 	}
 }
 

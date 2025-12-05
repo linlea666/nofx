@@ -122,6 +122,19 @@ export default function TraderDashboard() {
     }
   )
 
+  const formatPrice = (v?: number) => {
+    if (v === undefined || v === null || Number.isNaN(v)) return '-'
+    const abs = Math.abs(v)
+    if (abs >= 1000) return v.toFixed(1)
+    if (abs >= 10) return v.toFixed(2)
+    return v.toFixed(4)
+  }
+
+  const formatQty = (v?: number) => {
+    if (v === undefined || v === null || Number.isNaN(v)) return '-'
+    return v.toFixed(v >= 100 ? 2 : 4)
+  }
+
   const { data: decisions } = useSWR<DecisionRecord[]>(
     user && token && selectedTraderId
       ? `decisions/latest-${selectedTraderId}-${decisionLimit}`
@@ -474,6 +487,9 @@ export default function TraderDashboard() {
                         {t('positionValue', language)}
                       </th>
                       <th className="pb-3 font-semibold text-gray-400">
+                        {t('margin', language)}
+                      </th>
+                      <th className="pb-3 font-semibold text-gray-400">
                         {t('leverage', language)}
                       </th>
                       <th className="pb-3 font-semibold text-gray-400">
@@ -518,25 +534,34 @@ export default function TraderDashboard() {
                           className="py-3 font-mono"
                           style={{ color: '#EAECEF' }}
                         >
-                          {pos.entry_price.toFixed(4)}
+                          {formatPrice(pos.entry_price)}
                         </td>
                         <td
                           className="py-3 font-mono"
                           style={{ color: '#EAECEF' }}
                         >
-                          {pos.mark_price.toFixed(4)}
+                          {formatPrice(pos.mark_price)}
                         </td>
                         <td
                           className="py-3 font-mono"
                           style={{ color: '#EAECEF' }}
                         >
-                          {pos.quantity.toFixed(4)}
+                          {formatQty(pos.quantity)}
                         </td>
                         <td
                           className="py-3 font-mono font-bold"
                           style={{ color: '#EAECEF' }}
                         >
                           {(pos.quantity * pos.mark_price).toFixed(2)} USDT
+                        </td>
+                        <td
+                          className="py-3 font-mono"
+                          style={{ color: '#EAECEF' }}
+                        >
+                          {pos.margin_used !== undefined &&
+                          pos.margin_used !== null
+                            ? `${pos.margin_used.toFixed(2)} USDT`
+                            : '-'}
                         </td>
                         <td
                           className="py-3 font-mono"
@@ -561,7 +586,7 @@ export default function TraderDashboard() {
                           className="py-3 font-mono"
                           style={{ color: '#848E9C' }}
                         >
-                          {pos.liquidation_price.toFixed(4)}
+                          {formatPrice(pos.liquidation_price)}
                         </td>
                       </tr>
                     ))}
@@ -957,21 +982,26 @@ function DecisionCard({
 
       {/* Execution Logs */}
       {decision.execution_log && decision.execution_log.length > 0 && (
-        <div className="space-y-1">
-          {decision.execution_log.map((log, k) => (
-            <div
-              key={k}
-              className="text-xs font-mono"
-              style={{
-                color:
-                  log.includes('✓') || log.includes('成功')
-                    ? '#0ECB81'
-                    : '#F6465D',
-              }}
-            >
-              {log}
-            </div>
-          ))}
+        <div
+          className="space-y-1 rounded border px-3 py-2"
+          style={{ borderColor: '#2B3139', background: '#0B0E11' }}
+        >
+          {decision.execution_log.map((log, k) => {
+            const isSuccess =
+              log.includes('✓') ||
+              log.toLowerCase().includes('success') ||
+              log.includes('成功')
+            return (
+              <div
+                key={k}
+                className="text-xs font-mono flex items-start gap-2"
+                style={{ color: isSuccess ? '#0ECB81' : '#F6465D' }}
+              >
+                <span>{isSuccess ? '•' : '!'}</span>
+                <span className="whitespace-pre-wrap">{log}</span>
+              </div>
+            )
+          })}
         </div>
       )}
 
