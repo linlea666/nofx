@@ -295,6 +295,12 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
         is_cross_margin: data.is_cross_margin,
         use_coin_pool: data.use_coin_pool,
         use_oi_top: data.use_oi_top,
+        signal_source_type: data.signal_source_type,
+        signal_source_value: data.signal_source_value,
+        copy_trading_config:
+          data.signal_source_type === 'ai'
+            ? null
+            : data.copy_trading_config,
       }
 
       await toast.promise(api.updateTrader(editingTrader.trader_id, request), {
