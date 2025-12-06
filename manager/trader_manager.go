@@ -164,9 +164,6 @@ func (tm *TraderManager) LoadTradersFromDatabase(database *config.Database) erro
 		if userSignalSource, err := database.GetUserSignalSource(traderCfg.UserID); err == nil {
 			coinPoolURL = userSignalSource.CoinPoolURL
 			oiTopURL = userSignalSource.OITopURL
-		} else {
-			// 如果用户没有配置信号源，使用空字符串
-			log.Printf("🔍 用户 %s 暂未配置信号源", traderCfg.UserID)
 		}
 
 		// 添加到TraderManager
@@ -769,8 +766,6 @@ func (tm *TraderManager) LoadUserTraders(database *config.Database, userID strin
 		coinPoolURL = userSignalSource.CoinPoolURL
 		oiTopURL = userSignalSource.OITopURL
 		log.Printf("📡 加载用户 %s 的信号源配置: COIN POOL=%s, OI TOP=%s", userID, coinPoolURL, oiTopURL)
-	} else {
-		log.Printf("🔍 用户 %s 暂未配置信号源", userID)
 	}
 
 	// 解析配置
