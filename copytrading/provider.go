@@ -29,6 +29,10 @@ type Signal struct {
 	LeaderLeverage int
 	MarginMode    string    // "cross" or "isolated"
 	Timestamp     time.Time
+	// For proportional reduce/close:
+	DeltaSize        float64 // leader position change size (signed)
+	LeaderPosBefore  float64 // leader position size before this change (signed)
+	LeaderPosAfter   float64 // leader position size after this change (signed)
 }
 
 // Provider defines the behaviour for any external signal source.

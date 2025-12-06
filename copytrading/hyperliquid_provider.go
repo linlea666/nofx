@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"nofx/market"
 )
 
 type hyperliquidProvider struct {
@@ -117,13 +119,18 @@ func (p *hyperliquidProvider) fetchAndEmit(out chan<- Signal) error {
 		if delta == 0 {
 			continue
 		}
-		price := p.lastPrices[convertHyperliquidSymbol(sym)]
+		currSym := convertHyperliquidSymbol(sym)
+		price := p.lastPrices[currSym]
 		if price <= 0 {
-			// no recent fill price, skip to avoid wrong sizing
-			p.lastPositions[sym] = meta.Size
+			if md, err := market.Get(currSym); err == nil && md.CurrentPrice > 0 {
+				price = md.CurrentPrice
+				p.lastPrices[currSym] = price
+			}
+		}
+		if price <= 0 {
+			// keep snapshot, wait for price next round
 			continue
 		}
-		currSym := convertHyperliquidSymbol(sym)
 		// handle flip: close prev then open new
 		if prev > 0 && meta.Size < 0 {
 			out <- Signal{
@@ -134,6 +141,9 @@ func (p *hyperliquidProvider) fetchAndEmit(out chan<- Signal) error {
 				LeaderLeverage: meta.Leverage,
 				MarginMode:     meta.MarginMode,
 				Timestamp:      time.Now(),
+				DeltaSize:      -prev,
+				LeaderPosBefore: prev,
+				LeaderPosAfter:  0,
 			}
 			out <- Signal{
 				Symbol:         currSym,
@@ -143,6 +153,9 @@ func (p *hyperliquidProvider) fetchAndEmit(out chan<- Signal) error {
 				LeaderLeverage: meta.Leverage,
 				MarginMode:     meta.MarginMode,
 				Timestamp:      time.Now(),
+				DeltaSize:      meta.Size,
+				LeaderPosBefore: 0,
+				LeaderPosAfter:  meta.Size,
 			}
 			p.lastPositions[sym] = meta.Size
 			continue
@@ -156,6 +169,9 @@ func (p *hyperliquidProvider) fetchAndEmit(out chan<- Signal) error {
 				LeaderLeverage: meta.Leverage,
 				MarginMode:     meta.MarginMode,
 				Timestamp:      time.Now(),
+				DeltaSize:      -prev,
+				LeaderPosBefore: prev,
+				LeaderPosAfter:  0,
 			}
 			out <- Signal{
 				Symbol:         currSym,
@@ -165,6 +181,9 @@ func (p *hyperliquidProvider) fetchAndEmit(out chan<- Signal) error {
 				LeaderLeverage: meta.Leverage,
 				MarginMode:     meta.MarginMode,
 				Timestamp:      time.Now(),
+				DeltaSize:      meta.Size,
+				LeaderPosBefore: 0,
+				LeaderPosAfter:  meta.Size,
 			}
 			p.lastPositions[sym] = meta.Size
 			continue
@@ -183,6 +202,9 @@ func (p *hyperliquidProvider) fetchAndEmit(out chan<- Signal) error {
 			LeaderLeverage: meta.Leverage,
 			MarginMode:     meta.MarginMode,
 			Timestamp:      time.Now(),
+			DeltaSize:      delta,
+			LeaderPosBefore: prev,
+			LeaderPosAfter:  meta.Size,
 		}
 		out <- s
 		p.lastPositions[sym] = meta.Size
@@ -196,7 +218,14 @@ func (p *hyperliquidProvider) fetchAndEmit(out chan<- Signal) error {
 			delete(p.lastPositions, sym)
 			continue
 		}
-		price := p.lastPrices[convertHyperliquidSymbol(sym)]
+		currSym := convertHyperliquidSymbol(sym)
+		price := p.lastPrices[currSym]
+		if price <= 0 {
+			if md, err := market.Get(currSym); err == nil && md.CurrentPrice > 0 {
+				price = md.CurrentPrice
+				p.lastPrices[currSym] = price
+			}
+		}
 		if price <= 0 {
 			delete(p.lastPositions, sym)
 			continue
@@ -206,13 +235,16 @@ func (p *hyperliquidProvider) fetchAndEmit(out chan<- Signal) error {
 			action = ActionCloseShort
 		}
 		s := Signal{
-			Symbol:         convertHyperliquidSymbol(sym),
+			Symbol:         currSym,
 			Action:         action,
 			NotionalUSD:    math.Abs(prev) * price,
 			LeaderEquity:   state.AccountValue,
 			LeaderLeverage: 0,
 			MarginMode:     "",
 			Timestamp:      time.Now(),
+			DeltaSize:      -prev,
+			LeaderPosBefore: prev,
+			LeaderPosAfter:  0,
 		}
 		out <- s
 		delete(p.lastPositions, sym)

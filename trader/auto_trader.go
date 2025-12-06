@@ -422,24 +422,6 @@ func (at *AutoTrader) processCopySignal(sig copytrading.Signal) error {
 		return fmt.Errorf("账户净值为 0，无法执行复制交易")
 	}
 
-	proportion := sig.NotionalUSD / sig.LeaderEquity
-	if proportion <= 0 {
-		return nil
-	}
-
-	amountUSD := proportion * followerEquity * (cfg.FollowRatio / 100)
-	if amountUSD <= 0 {
-		return nil
-	}
-
-	if cfg.MinAmount > 0 && amountUSD < cfg.MinAmount {
-		log.Printf("📉 [%s] 忽略过小的复制金额 %.2f < %.2f", at.name, amountUSD, cfg.MinAmount)
-		return nil
-	}
-	if cfg.MaxAmount > 0 && amountUSD > cfg.MaxAmount {
-		amountUSD = cfg.MaxAmount
-	}
-
 	marketData, err := market.Get(sig.Symbol)
 	if err != nil {
 		return fmt.Errorf("获取市场价格失败: %w", err)
@@ -448,20 +430,78 @@ func (at *AutoTrader) processCopySignal(sig copytrading.Signal) error {
 		return fmt.Errorf("无效的市场价格: %s", sig.Symbol)
 	}
 
-	quantity := amountUSD / marketData.CurrentPrice
-	if quantity <= 0 {
-		return nil
-	}
-
 	positions, err := at.trader.GetPositions()
 	if err != nil {
 		return fmt.Errorf("获取持仓失败: %w", err)
 	}
 	accountSnapshot.PositionCount = len(positions)
 
+	// sizing
+	var quantity float64
+	isReduce := sig.Action == copytrading.ActionCloseLong ||
+		sig.Action == copytrading.ActionCloseShort ||
+		sig.Action == copytrading.ActionReduceLong ||
+		sig.Action == copytrading.ActionReduceShort
+
+	longQty := getPositionQuantity(positions, sig.Symbol, "long")
+	shortQty := getPositionQuantity(positions, sig.Symbol, "short")
+
+	if isReduce {
+		// 按领航员变动比例作用于本地持仓
+		var leaderBefore float64
+		if sig.LeaderPosBefore != 0 {
+			leaderBefore = math.Abs(sig.LeaderPosBefore)
+		}
+		ratio := 1.0
+		if leaderBefore > 0 && sig.DeltaSize != 0 {
+			ratio = math.Min(1, math.Abs(sig.DeltaSize)/leaderBefore)
+		}
+		if ratio <= 0 {
+			return nil
+		}
+		if sig.Action == copytrading.ActionCloseLong || sig.Action == copytrading.ActionReduceLong {
+			if longQty <= 0 {
+				return nil
+			}
+			quantity = longQty * ratio
+			if sig.Action == copytrading.ActionCloseLong {
+				quantity = longQty // 全平
+			}
+		} else {
+			if shortQty <= 0 {
+				return nil
+			}
+			quantity = shortQty * ratio
+			if sig.Action == copytrading.ActionCloseShort {
+				quantity = shortQty // 全平
+			}
+		}
+	} else {
+		// 开/加仓仍按权益比例复制名义金额
+		proportion := sig.NotionalUSD / sig.LeaderEquity
+		if proportion <= 0 {
+			return nil
+		}
+		amountUSD := proportion * followerEquity * (cfg.FollowRatio / 100)
+		if amountUSD <= 0 {
+			return nil
+		}
+		if cfg.MinAmount > 0 && amountUSD < cfg.MinAmount {
+			log.Printf("📉 [%s] 忽略过小的复制金额 %.2f < %.2f", at.name, amountUSD, cfg.MinAmount)
+			return nil
+		}
+		if cfg.MaxAmount > 0 && amountUSD > cfg.MaxAmount {
+			amountUSD = cfg.MaxAmount
+		}
+		quantity = amountUSD / marketData.CurrentPrice
+		if quantity <= 0 {
+			return nil
+		}
+	}
+
 	execLog := []string{
-		fmt.Sprintf("信号源 %s(%s) -> %s %s, leaderEq=%.2f, notional=%.2f, followerEq=%.2f, ratio=%.2f%%, copyUSD=%.2f",
-			at.signalSourceValue, at.signalSourceType, sig.Symbol, sig.Action, sig.LeaderEquity, sig.NotionalUSD, followerEquity, cfg.FollowRatio, amountUSD),
+		fmt.Sprintf("信号源 %s(%s) -> %s %s, leaderEq=%.2f, notional=%.2f, followerEq=%.2f, ratio=%.2f%%, qty=%.6f",
+			at.signalSourceValue, at.signalSourceType, sig.Symbol, sig.Action, sig.LeaderEquity, sig.NotionalUSD, followerEquity, cfg.FollowRatio, quantity),
 	}
 	leverage := at.defaultLeverageForSymbol(sig.Symbol)
 	if cfg.SyncLeverage && sig.LeaderLeverage > 0 {

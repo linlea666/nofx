@@ -4,12 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"nofx/market"
 )
 
 type okxProvider struct {
@@ -119,7 +122,12 @@ func (p *okxProvider) fetchAndEmit(out chan<- Signal) error {
 		}
 		price := p.lastPrices[sym]
 		if price <= 0 {
-			p.lastPositions[sym] = meta.Size
+			if md, err := market.Get(sym); err == nil && md.CurrentPrice > 0 {
+				price = md.CurrentPrice
+				p.lastPrices[sym] = price
+			}
+		}
+		if price <= 0 {
 			continue
 		}
 		// direction flip
@@ -132,6 +140,9 @@ func (p *okxProvider) fetchAndEmit(out chan<- Signal) error {
 				LeaderLeverage: meta.Leverage,
 				MarginMode:     meta.MarginMode,
 				Timestamp:      time.Now(),
+				DeltaSize:      -prev,
+				LeaderPosBefore: prev,
+				LeaderPosAfter:  0,
 			}
 			out <- Signal{
 				Symbol:         sym,
@@ -141,6 +152,9 @@ func (p *okxProvider) fetchAndEmit(out chan<- Signal) error {
 				LeaderLeverage: meta.Leverage,
 				MarginMode:     meta.MarginMode,
 				Timestamp:      time.Now(),
+				DeltaSize:      meta.Size,
+				LeaderPosBefore: 0,
+				LeaderPosAfter:  meta.Size,
 			}
 			p.lastPositions[sym] = meta.Size
 			continue
@@ -154,6 +168,9 @@ func (p *okxProvider) fetchAndEmit(out chan<- Signal) error {
 				LeaderLeverage: meta.Leverage,
 				MarginMode:     meta.MarginMode,
 				Timestamp:      time.Now(),
+				DeltaSize:      -prev,
+				LeaderPosBefore: prev,
+				LeaderPosAfter:  0,
 			}
 			out <- Signal{
 				Symbol:         sym,
@@ -163,6 +180,9 @@ func (p *okxProvider) fetchAndEmit(out chan<- Signal) error {
 				LeaderLeverage: meta.Leverage,
 				MarginMode:     meta.MarginMode,
 				Timestamp:      time.Now(),
+				DeltaSize:      meta.Size,
+				LeaderPosBefore: 0,
+				LeaderPosAfter:  meta.Size,
 			}
 			p.lastPositions[sym] = meta.Size
 			continue
@@ -181,8 +201,50 @@ func (p *okxProvider) fetchAndEmit(out chan<- Signal) error {
 			LeaderLeverage: meta.Leverage,
 			MarginMode:     meta.MarginMode,
 			Timestamp:      time.Now(),
+			DeltaSize:      delta,
+			LeaderPosBefore: prev,
+			LeaderPosAfter:  meta.Size,
 		}
 		p.lastPositions[sym] = meta.Size
+	}
+
+	// handle symbols that disappeared -> full close
+	for sym, prev := range p.lastPositions {
+		if _, ok := positions[sym]; ok {
+			continue
+		}
+		if prev == 0 {
+			delete(p.lastPositions, sym)
+			continue
+		}
+		price := p.lastPrices[sym]
+		if price <= 0 {
+			if md, err := market.Get(sym); err == nil && md.CurrentPrice > 0 {
+				price = md.CurrentPrice
+				p.lastPrices[sym] = price
+			}
+		}
+		if price <= 0 {
+			delete(p.lastPositions, sym)
+			continue
+		}
+		action := ActionCloseLong
+		if prev < 0 {
+			action = ActionCloseShort
+		}
+		out <- Signal{
+			Symbol:         sym,
+			Action:         action,
+			NotionalUSD:    math.Abs(prev) * price,
+			LeaderEquity:   accountValue,
+			LeaderLeverage: 0,
+			MarginMode:     "",
+			Timestamp:      time.Now(),
+			DeltaSize:      -prev,
+			LeaderPosBefore: prev,
+			LeaderPosAfter:  0,
+		}
+		delete(p.lastPositions, sym)
 	}
 
 	return nil
