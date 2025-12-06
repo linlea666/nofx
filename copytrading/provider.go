@@ -14,6 +14,10 @@ const (
 	ActionOpenShort SignalAction = "open_short"
 	ActionCloseLong SignalAction = "close_long"
 	ActionCloseShort SignalAction = "close_short"
+	ActionAddLong   SignalAction = "add_long"    // treated as open_long with delta
+	ActionAddShort  SignalAction = "add_short"   // treated as open_short with delta
+	ActionReduceLong SignalAction = "reduce_long" // treated as close_long with delta
+	ActionReduceShort SignalAction = "reduce_short"
 )
 
 // Signal is the normalized structure describing a leader's fill event.
@@ -58,4 +62,26 @@ func NewProvider(cfg Config) (Provider, error) {
 	default:
 		return nil, errors.New("unsupported signal source type")
 	}
+}
+
+// deriveActionFromDelta determines action based on previous and current position size (signed).
+// Caller should handle direction flip separately if needed.
+func deriveActionFromDelta(prev, curr float64) SignalAction {
+	delta := curr - prev
+	if delta == 0 {
+		return ""
+	}
+	if curr > prev { // moving towards long (increase long or reduce short)
+		if curr > 0 {
+			return ActionAddLong
+		}
+		return ActionReduceShort
+	}
+	if curr < prev { // moving towards short (increase short or reduce long)
+		if curr < 0 {
+			return ActionAddShort
+		}
+		return ActionReduceLong
+	}
+	return ""
 }

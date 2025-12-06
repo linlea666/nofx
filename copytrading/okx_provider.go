@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math"
 	"net/http"
 	"net/url"
 	"sort"
@@ -19,6 +18,8 @@ type okxProvider struct {
 	client       *http.Client
 	lastFillTime int64
 	initialized  bool
+	lastPositions map[string]float64       // signed size
+	lastPrices    map[string]float64       // last fill price per symbol
 }
 
 func newOKXProvider(uniqueName string, pollInterval time.Duration, client *http.Client) Provider {
@@ -26,6 +27,8 @@ func newOKXProvider(uniqueName string, pollInterval time.Duration, client *http.
 		uniqueName:   strings.TrimSpace(uniqueName),
 		pollInterval: pollInterval,
 		client:       client,
+		lastPositions: make(map[string]float64),
+		lastPrices:    make(map[string]float64),
 	}
 }
 
@@ -64,7 +67,7 @@ func (p *okxProvider) fetchAndEmit(out chan<- Signal) error {
 		return fmt.Errorf("okx equity invalid")
 	}
 
-	marginModes, err := p.fetchMarginModes()
+	positions, err := p.fetchPositions()
 	if err != nil {
 		return err
 	}
@@ -76,62 +79,112 @@ func (p *okxProvider) fetchAndEmit(out chan<- Signal) error {
 		return trades[i].FillTime < trades[j].FillTime
 	})
 
+	maxFill := p.lastFillTime
 	for _, trade := range trades {
 		if trade.FillTime <= p.lastFillTime {
 			continue
 		}
 
-		if !p.initialized {
-			p.lastFillTime = trade.FillTime
-			continue
-		}
-
-		action := mapOKXAction(trade.PosSide, trade.Side)
-		if action == "" {
-			p.lastFillTime = trade.FillTime
-			continue
-		}
-
 		symbol := formatOKXSymbol(trade.InstID)
 		if symbol == "" {
-			p.lastFillTime = trade.FillTime
 			continue
 		}
 
-		notional, _ := strconv.ParseFloat(trade.Value, 64)
-		notional = math.Abs(notional)
-		if notional <= 0 {
-			avgPx, _ := strconv.ParseFloat(trade.AvgPx, 64)
-			sz, _ := strconv.ParseFloat(trade.Size, 64)
-			notional = avgPx * sz
+		avgPx, _ := strconv.ParseFloat(trade.AvgPx, 64)
+		if avgPx > 0 {
+			p.lastPrices[symbol] = avgPx
 		}
-		if notional <= 0 {
-			p.lastFillTime = trade.FillTime
-			continue
+		if trade.FillTime > maxFill {
+			maxFill = trade.FillTime
 		}
-
-		lever, _ := strconv.ParseFloat(trade.Lever, 64)
-		if lever <= 0 {
-			lever = 1
-		}
-		marginMode := marginModes[trade.InstID]
-
-		s := Signal{
-			Symbol:        symbol,
-			Action:        action,
-			NotionalUSD:   notional,
-			LeaderEquity:  accountValue,
-			LeaderLeverage: int(lever),
-			MarginMode:    marginMode,
-			Timestamp:     time.UnixMilli(trade.FillTime),
-		}
-		out <- s
-		p.lastFillTime = trade.FillTime
+	}
+	if maxFill > p.lastFillTime {
+		p.lastFillTime = maxFill
 	}
 
+	// initialize snapshot without emitting historical signals
 	if !p.initialized {
+		for sym, meta := range positions {
+			p.lastPositions[sym] = meta.Size
+		}
 		p.initialized = true
+		return nil
 	}
+
+	for sym, meta := range positions {
+		prev := p.lastPositions[sym]
+		delta := meta.Size - prev
+		if delta == 0 {
+			continue
+		}
+		price := p.lastPrices[sym]
+		if price <= 0 {
+			p.lastPositions[sym] = meta.Size
+			continue
+		}
+		// direction flip
+		if prev > 0 && meta.Size < 0 {
+			out <- Signal{
+				Symbol:         sym,
+				Action:         ActionCloseLong,
+				NotionalUSD:    math.Abs(prev) * price,
+				LeaderEquity:   accountValue,
+				LeaderLeverage: meta.Leverage,
+				MarginMode:     meta.MarginMode,
+				Timestamp:      time.Now(),
+			}
+			out <- Signal{
+				Symbol:         sym,
+				Action:         ActionOpenShort,
+				NotionalUSD:    math.Abs(meta.Size) * price,
+				LeaderEquity:   accountValue,
+				LeaderLeverage: meta.Leverage,
+				MarginMode:     meta.MarginMode,
+				Timestamp:      time.Now(),
+			}
+			p.lastPositions[sym] = meta.Size
+			continue
+		}
+		if prev < 0 && meta.Size > 0 {
+			out <- Signal{
+				Symbol:         sym,
+				Action:         ActionCloseShort,
+				NotionalUSD:    math.Abs(prev) * price,
+				LeaderEquity:   accountValue,
+				LeaderLeverage: meta.Leverage,
+				MarginMode:     meta.MarginMode,
+				Timestamp:      time.Now(),
+			}
+			out <- Signal{
+				Symbol:         sym,
+				Action:         ActionOpenLong,
+				NotionalUSD:    math.Abs(meta.Size) * price,
+				LeaderEquity:   accountValue,
+				LeaderLeverage: meta.Leverage,
+				MarginMode:     meta.MarginMode,
+				Timestamp:      time.Now(),
+			}
+			p.lastPositions[sym] = meta.Size
+			continue
+		}
+
+		action := deriveActionFromDelta(prev, meta.Size)
+		if action == "" {
+			p.lastPositions[sym] = meta.Size
+			continue
+		}
+		out <- Signal{
+			Symbol:         sym,
+			Action:         action,
+			NotionalUSD:    math.Abs(delta) * price,
+			LeaderEquity:   accountValue,
+			LeaderLeverage: meta.Leverage,
+			MarginMode:     meta.MarginMode,
+			Timestamp:      time.Now(),
+		}
+		p.lastPositions[sym] = meta.Size
+	}
+
 	return nil
 }
 
@@ -277,8 +330,11 @@ type okxPositionParent struct {
 }
 
 type okxPositionEntry struct {
-	InstID    string `json:"instId"`
+	InstID     string `json:"instId"`
 	MarginMode string `json:"mgnMode"`
+	PosSide    string `json:"posSide"`
+	Pos        string `json:"pos"`
+	Lever      string `json:"lever"`
 }
 
 func mapOKXAction(posSide, side string) SignalAction {
@@ -308,4 +364,62 @@ func formatOKXSymbol(instID string) string {
 	instID = strings.ReplaceAll(instID, "-SWAP", "")
 	instID = strings.ReplaceAll(instID, "-", "")
 	return instID
+}
+
+type okxPositionMeta struct {
+	Size       float64
+	Leverage   int
+	MarginMode string
+}
+
+func (p *okxProvider) fetchPositions() (map[string]okxPositionMeta, error) {
+	params := url.Values{}
+	params.Set("uniqueName", p.uniqueName)
+	params.Set("t", fmt.Sprintf("%d", time.Now().UnixMilli()))
+	endpoint := fmt.Sprintf("https://www.okx.com/priapi/v5/ecotrade/public/community/user/position-current?%s", params.Encode())
+
+	req, err := http.NewRequest("GET", endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("okx position error: %s", resp.Status)
+	}
+
+	var result okxPositionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	positions := make(map[string]okxPositionMeta)
+	for _, entry := range result.Data {
+		for _, pos := range entry.PosData {
+			symbol := formatOKXSymbol(pos.InstID)
+			if symbol == "" {
+				continue
+			}
+			size, _ := strconv.ParseFloat(pos.Pos, 64)
+			lever, _ := strconv.ParseFloat(pos.Lever, 64)
+			if lever <= 0 {
+				lever = 1
+			}
+			// sign by side
+			if strings.ToLower(pos.PosSide) == "short" {
+				size = -size
+			}
+			positions[symbol] = okxPositionMeta{
+				Size:       size,
+				Leverage:   int(lever),
+				MarginMode: strings.ToLower(pos.MarginMode),
+			}
+		}
+	}
+	return positions, nil
 }

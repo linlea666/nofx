@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -18,6 +19,8 @@ type hyperliquidProvider struct {
 	client       *http.Client
 	lastTID      int64
 	initialized  bool
+	lastPositions map[string]float64       // signed size: long >0, short <0
+	lastPrices    map[string]float64        // last seen fill price per symbol
 }
 
 func newHyperliquidProvider(user string, pollInterval time.Duration, client *http.Client) Provider {
@@ -25,6 +28,8 @@ func newHyperliquidProvider(user string, pollInterval time.Duration, client *htt
 		user:         strings.TrimSpace(user),
 		pollInterval: pollInterval,
 		client:       client,
+		lastPositions: make(map[string]float64),
+		lastPrices:    make(map[string]float64),
 	}
 }
 
@@ -64,6 +69,8 @@ func (p *hyperliquidProvider) fetchAndEmit(out chan<- Signal) error {
 		return fmt.Errorf("invalid Hyperliquid account value")
 	}
 
+	// track latest price per symbol from fills
+	maxTID := p.lastTID
 	sort.Slice(fills, func(i, j int) bool {
 		if fills[i].Time == fills[j].Time {
 			return fills[i].TID < fills[j].TID
@@ -76,47 +83,141 @@ func (p *hyperliquidProvider) fetchAndEmit(out chan<- Signal) error {
 			continue
 		}
 
-		if !p.initialized {
-			p.lastTID = fill.TID
-			continue
-		}
-
-		action := mapHyperliquidAction(fill.Dir)
-		if action == "" {
-			p.lastTID = fill.TID
-			continue
-		}
-
 		symbol := convertHyperliquidSymbol(fill.Coin)
 		if symbol == "" {
 			p.lastTID = fill.TID
 			continue
 		}
 
-		notional := fill.price() * fill.size()
-		if notional <= 0 {
-			p.lastTID = fill.TID
+		price := fill.price()
+		if price > 0 {
+			p.lastPrices[symbol] = price
+		}
+
+		if fill.TID > maxTID {
+			maxTID = fill.TID
+		}
+	}
+	if maxTID > p.lastTID {
+		p.lastTID = maxTID
+	}
+
+	// diff positions: compare current sizes with last snapshot
+	if !p.initialized {
+		for sym, meta := range state.Positions {
+			p.lastPositions[sym] = meta.Size
+		}
+		p.initialized = true
+		return nil
+	}
+
+	for sym, meta := range state.Positions {
+		prev := p.lastPositions[sym]
+		delta := meta.Size - prev
+		if delta == 0 {
+			continue
+		}
+		price := p.lastPrices[convertHyperliquidSymbol(sym)]
+		if price <= 0 {
+			// no recent fill price, skip to avoid wrong sizing
+			p.lastPositions[sym] = meta.Size
+			continue
+		}
+		currSym := convertHyperliquidSymbol(sym)
+		// handle flip: close prev then open new
+		if prev > 0 && meta.Size < 0 {
+			out <- Signal{
+				Symbol:         currSym,
+				Action:         ActionCloseLong,
+				NotionalUSD:    math.Abs(prev) * price,
+				LeaderEquity:   state.AccountValue,
+				LeaderLeverage: meta.Leverage,
+				MarginMode:     meta.MarginMode,
+				Timestamp:      time.Now(),
+			}
+			out <- Signal{
+				Symbol:         currSym,
+				Action:         ActionOpenShort,
+				NotionalUSD:    math.Abs(meta.Size) * price,
+				LeaderEquity:   state.AccountValue,
+				LeaderLeverage: meta.Leverage,
+				MarginMode:     meta.MarginMode,
+				Timestamp:      time.Now(),
+			}
+			p.lastPositions[sym] = meta.Size
+			continue
+		}
+		if prev < 0 && meta.Size > 0 {
+			out <- Signal{
+				Symbol:         currSym,
+				Action:         ActionCloseShort,
+				NotionalUSD:    math.Abs(prev) * price,
+				LeaderEquity:   state.AccountValue,
+				LeaderLeverage: meta.Leverage,
+				MarginMode:     meta.MarginMode,
+				Timestamp:      time.Now(),
+			}
+			out <- Signal{
+				Symbol:         currSym,
+				Action:         ActionOpenLong,
+				NotionalUSD:    math.Abs(meta.Size) * price,
+				LeaderEquity:   state.AccountValue,
+				LeaderLeverage: meta.Leverage,
+				MarginMode:     meta.MarginMode,
+				Timestamp:      time.Now(),
+			}
+			p.lastPositions[sym] = meta.Size
 			continue
 		}
 
-		posMeta := state.Positions[strings.ToUpper(fill.Coin)]
-		s := Signal{
-			Symbol:        symbol,
-			Action:        action,
-			NotionalUSD:   notional,
-			LeaderEquity:  state.AccountValue,
-			LeaderLeverage: posMeta.Leverage,
-			MarginMode:    posMeta.MarginMode,
-			Timestamp:     time.UnixMilli(fill.Time),
+		action := deriveActionFromDelta(prev, meta.Size)
+		if action == "" {
+			p.lastPositions[sym] = meta.Size
+			continue
 		}
-
+		s := Signal{
+			Symbol:         currSym,
+			Action:         action,
+			NotionalUSD:    math.Abs(delta) * price,
+			LeaderEquity:   state.AccountValue,
+			LeaderLeverage: meta.Leverage,
+			MarginMode:     meta.MarginMode,
+			Timestamp:      time.Now(),
+		}
 		out <- s
-		p.lastTID = fill.TID
+		p.lastPositions[sym] = meta.Size
+	}
+	// handle symbols that were closed (now absent)
+	for sym, prev := range p.lastPositions {
+		if _, ok := state.Positions[sym]; ok {
+			continue
+		}
+		if prev == 0 {
+			delete(p.lastPositions, sym)
+			continue
+		}
+		price := p.lastPrices[convertHyperliquidSymbol(sym)]
+		if price <= 0 {
+			delete(p.lastPositions, sym)
+			continue
+		}
+		action := ActionCloseLong
+		if prev < 0 {
+			action = ActionCloseShort
+		}
+		s := Signal{
+			Symbol:         convertHyperliquidSymbol(sym),
+			Action:         action,
+			NotionalUSD:    math.Abs(prev) * price,
+			LeaderEquity:   state.AccountValue,
+			LeaderLeverage: 0,
+			MarginMode:     "",
+			Timestamp:      time.Now(),
+		}
+		out <- s
+		delete(p.lastPositions, sym)
 	}
 
-	if !p.initialized {
-		p.initialized = true
-	}
 	return nil
 }
 
@@ -206,6 +307,7 @@ type hyperliquidState struct {
 type hyperliquidPositionMeta struct {
 	MarginMode string
 	Leverage   int
+	Size       float64 // signed size: long>0, short<0
 }
 
 type hyperliquidStateRaw struct {
@@ -215,6 +317,7 @@ type hyperliquidStateRaw struct {
 	AssetPositions []struct {
 		Position struct {
 			Coin     string `json:"coin"`
+			Szi      string `json:"szi"`
 			Leverage struct {
 				Type  string  `json:"type"`
 				Value float64 `json:"value"`
@@ -236,9 +339,11 @@ func (s *hyperliquidStateRaw) normalize() (*hyperliquidState, error) {
 		if lev <= 0 {
 			lev = 1
 		}
+		size, _ := strconv.ParseFloat(asset.Position.Szi, 64)
 		state.Positions[coin] = hyperliquidPositionMeta{
 			MarginMode: asset.Position.Leverage.Type,
 			Leverage:   lev,
+			Size:       size,
 		}
 	}
 

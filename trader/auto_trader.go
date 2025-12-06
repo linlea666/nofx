@@ -514,6 +514,8 @@ func (at *AutoTrader) executeCopyTrade(sig copytrading.Signal, quantity float64,
 
 	switch sig.Action {
 	case copytrading.ActionOpenLong:
+		fallthrough
+	case copytrading.ActionAddLong:
 		hasPosition := longQty > 0
 		if hasPosition && !cfg.FollowAdd {
 			return nil
@@ -523,6 +525,8 @@ func (at *AutoTrader) executeCopyTrade(sig copytrading.Signal, quantity float64,
 		}
 		_, err = at.trader.OpenLong(sig.Symbol, quantity, leverage)
 	case copytrading.ActionOpenShort:
+		fallthrough
+	case copytrading.ActionAddShort:
 		hasPosition := shortQty > 0
 		if hasPosition && !cfg.FollowAdd {
 			return nil
@@ -532,12 +536,16 @@ func (at *AutoTrader) executeCopyTrade(sig copytrading.Signal, quantity float64,
 		}
 		_, err = at.trader.OpenShort(sig.Symbol, quantity, leverage)
 	case copytrading.ActionCloseLong:
+		fallthrough
+	case copytrading.ActionReduceLong:
 		if !cfg.FollowReduce || longQty <= 0 {
 			return nil
 		}
 		qty := math.Min(longQty, quantity)
 		_, err = at.trader.CloseLong(sig.Symbol, qty)
 	case copytrading.ActionCloseShort:
+		fallthrough
+	case copytrading.ActionReduceShort:
 		if !cfg.FollowReduce || shortQty <= 0 {
 			return nil
 		}
