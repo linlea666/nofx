@@ -122,6 +122,7 @@ export default function TraderDashboard() {
     }
   )
 
+  // formatting helpers to keep table compact
   const formatPrice = (v?: number) => {
     if (v === undefined || v === null || Number.isNaN(v)) return '-'
     const abs = Math.abs(v)

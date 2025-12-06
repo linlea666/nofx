@@ -544,6 +544,7 @@ func (at *AutoTrader) executeCopyTrade(sig copytrading.Signal, quantity float64,
 		}
 	}
 
+	// leverage/margin sync is applied before sizing execution
 	if cfg.SyncLeverage && sig.LeaderLeverage > 0 {
 		if err := at.trader.SetLeverage(sig.Symbol, leverage); err != nil {
 			log.Printf("⚠️  设置杠杆失败: %v", err)
