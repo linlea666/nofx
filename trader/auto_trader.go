@@ -438,6 +438,11 @@ func (at *AutoTrader) processCopySignal(sig copytrading.Signal) error {
 
 	// sizing
 	var quantity float64
+	actionRecord := logger.DecisionAction{
+		Action:    string(sig.Action),
+		Symbol:    sig.Symbol,
+		Timestamp: time.Now(),
+	}
 	isReduce := sig.Action == copytrading.ActionCloseLong ||
 		sig.Action == copytrading.ActionCloseShort ||
 		sig.Action == copytrading.ActionReduceLong ||
@@ -526,14 +531,8 @@ func (at *AutoTrader) processCopySignal(sig copytrading.Signal) error {
 	if cfg.SyncLeverage && sig.LeaderLeverage > 0 {
 		leverage = sig.LeaderLeverage
 	}
-
-	actionRecord := logger.DecisionAction{
-		Action:    string(sig.Action),
-		Symbol:    sig.Symbol,
-		Quantity:  quantity,
-		Leverage:  leverage,
-		Timestamp: time.Now(),
-	}
+	actionRecord.Quantity = quantity
+	actionRecord.Leverage = leverage
 
 	err = at.executeCopyTrade(sig, quantity, cfg, positions, leverage)
 	if err != nil {
