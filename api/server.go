@@ -812,7 +812,11 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 		scanIntervalMinutes = 3
 	}
 
-	signalSourceType := normalizeSignalSourceType(req.SignalSourceType)
+	// 信号源处理：若前端未传则保持原值，避免被重置为 ai
+	signalSourceType := existingTrader.SignalSourceType
+	if req.SignalSourceType != "" {
+		signalSourceType = normalizeSignalSourceType(req.SignalSourceType)
+	}
 	signalSourceValue := existingTrader.SignalSourceValue
 	copyTradingConfigJSON := existingTrader.CopyTradingConfig
 	if signalSourceType == "ai" {
