@@ -50,6 +50,15 @@ export interface DecisionAction {
   timestamp: string
   success: boolean
   error: string
+  leader_equity?: number
+  leader_notional_usd?: number
+  leader_margin_usd?: number
+  leader_price?: number
+  follower_equity?: number
+  follower_margin_usd?: number
+  copy_ratio?: number
+  min_amount_applied?: boolean
+  max_amount_applied?: boolean
 }
 
 // 决策记录

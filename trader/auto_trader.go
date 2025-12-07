@@ -477,26 +477,45 @@ func (at *AutoTrader) processCopySignal(sig copytrading.Signal) error {
 			}
 		}
 	} else {
-		// 开/加仓仍按权益比例复制名义金额
-		proportion := sig.NotionalUSD / sig.LeaderEquity
+		// 开/加仓按资金比例复制保证金：pct = leader_margin / leader_equity
+		leaderLeverage := math.Max(1, float64(sig.LeaderLeverage))
+		leaderMargin := sig.NotionalUSD / leaderLeverage
+		if leaderMargin <= 0 {
+			return nil
+		}
+		proportion := leaderMargin / sig.LeaderEquity
 		if proportion <= 0 {
 			return nil
 		}
-		amountUSD := proportion * followerEquity * (cfg.FollowRatio / 100)
-		if amountUSD <= 0 {
-			return nil
+		followerMargin := proportion * followerEquity * (cfg.FollowRatio / 100)
+		appliedMin := false
+		appliedMax := false
+		if cfg.MinAmount > 0 && followerMargin < cfg.MinAmount {
+			followerMargin = cfg.MinAmount
+			appliedMin = true
 		}
-		if cfg.MinAmount > 0 && amountUSD < cfg.MinAmount {
-			log.Printf("📉 [%s] 忽略过小的复制金额 %.2f < %.2f", at.name, amountUSD, cfg.MinAmount)
-			return nil
+		if cfg.MaxAmount > 0 && followerMargin > cfg.MaxAmount {
+			followerMargin = cfg.MaxAmount
+			appliedMax = true
 		}
-		if cfg.MaxAmount > 0 && amountUSD > cfg.MaxAmount {
-			amountUSD = cfg.MaxAmount
-		}
-		quantity = amountUSD / marketData.CurrentPrice
+		quantity = followerMargin / marketData.CurrentPrice
 		if quantity <= 0 {
 			return nil
 		}
+		// enrich action record with sizing info
+		actionRecord.LeaderEquity = sig.LeaderEquity
+		actionRecord.LeaderNotionalUSD = sig.NotionalUSD
+		actionRecord.LeaderMarginUSD = leaderMargin
+		if sig.Price > 0 {
+			actionRecord.LeaderPrice = sig.Price
+		} else if sig.DeltaSize != 0 {
+			actionRecord.LeaderPrice = sig.NotionalUSD / math.Abs(sig.DeltaSize)
+		}
+		actionRecord.FollowerEquity = followerEquity
+		actionRecord.FollowerMarginUSD = followerMargin
+		actionRecord.CopyRatio = cfg.FollowRatio
+		actionRecord.MinAmountApplied = appliedMin
+		actionRecord.MaxAmountApplied = appliedMax
 	}
 
 	execLog := []string{

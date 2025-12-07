@@ -53,15 +53,25 @@ type PositionSnapshot struct {
 
 // DecisionAction 决策动作
 type DecisionAction struct {
-	Action    string    `json:"action"`    // open_long, open_short, close_long, close_short, update_stop_loss, update_take_profit, partial_close
-	Symbol    string    `json:"symbol"`    // 币种
-	Quantity  float64   `json:"quantity"`  // 数量（部分平仓时使用）
-	Leverage  int       `json:"leverage"`  // 杠杆（开仓时）
-	Price     float64   `json:"price"`     // 执行价格
-	OrderID   int64     `json:"order_id"`  // 订单ID
-	Timestamp time.Time `json:"timestamp"` // 执行时间
-	Success   bool      `json:"success"`   // 是否成功
-	Error     string    `json:"error"`     // 错误信息
+	Action    string    `json:"action"`              // open_long, open_short, close_long, close_short, update_stop_loss, update_take_profit, partial_close
+	Symbol    string    `json:"symbol"`              // 币种
+	Quantity  float64   `json:"quantity"`            // 数量（部分平仓时使用）
+	Leverage  int       `json:"leverage"`            // 杠杆（开仓时）
+	Price     float64   `json:"price"`               // 执行价格
+	OrderID   int64     `json:"order_id"`            // 订单ID
+	Timestamp time.Time `json:"timestamp"`           // 执行时间
+	Success   bool      `json:"success"`             // 是否成功
+	Error     string    `json:"error"`               // 错误信息
+	// 复制交易辅助字段（可选，用于前端展示）
+	LeaderEquity        float64 `json:"leader_equity,omitempty"`         // 领航员账户净值
+	LeaderNotionalUSD   float64 `json:"leader_notional_usd,omitempty"`   // 领航员本次名义金额
+	LeaderMarginUSD     float64 `json:"leader_margin_usd,omitempty"`     // 领航员本次保证金（名义/杠杆）
+	LeaderPrice         float64 `json:"leader_price,omitempty"`          // 领航员价格估计
+	FollowerEquity      float64 `json:"follower_equity,omitempty"`       // 跟随者账户净值
+	FollowerMarginUSD   float64 `json:"follower_margin_usd,omitempty"`   // 跟随者下单保证金
+	CopyRatio           float64 `json:"copy_ratio,omitempty"`            // 跟单系数 %
+	MinAmountApplied    bool    `json:"min_amount_applied,omitempty"`    // 是否触发最小额
+	MaxAmountApplied    bool    `json:"max_amount_applied,omitempty"`    // 是否触发最大额
 }
 
 // IDecisionLogger 决策日志记录器接口

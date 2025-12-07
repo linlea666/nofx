@@ -859,61 +859,80 @@ function DecisionCard({
       {/* Decisions Actions */}
       {decision.decisions && decision.decisions.length > 0 && (
         <div className="space-y-2 mb-3">
-          {decision.decisions.map((action, j) => (
-            <div
-              key={j}
-              className="flex items-center gap-2 text-sm rounded px-3 py-2"
-              style={{ background: '#0B0E11' }}
-            >
-              <span
-                className="font-mono font-bold"
-                style={{ color: '#EAECEF' }}
+            {decision.decisions.map((action, j) => (
+              <div
+                key={j}
+                className="flex items-center gap-2 text-sm rounded px-3 py-2"
+                style={{ background: '#0B0E11' }}
               >
-                {action.symbol}
-              </span>
-              <span
-                className="px-2 py-0.5 rounded text-xs font-bold"
-                style={
-                  action.action.includes('open')
-                    ? {
-                        background: 'rgba(96, 165, 250, 0.1)',
-                        color: '#60a5fa',
-                      }
-                    : {
-                        background: 'rgba(240, 185, 11, 0.1)',
-                        color: '#F0B90B',
-                      }
-                }
-              >
-                {action.action}
-              </span>
-              {action.leverage > 0 && (
-                <span style={{ color: '#F0B90B' }}>{action.leverage}x</span>
-              )}
-              {action.price > 0 && (
                 <span
-                  className="font-mono text-xs"
-                  style={{ color: '#848E9C' }}
+                  className="font-mono font-bold"
+                  style={{ color: '#EAECEF' }}
                 >
-                  @{action.price.toFixed(4)}
+                  {action.symbol}
                 </span>
-              )}
-              <span style={{ color: action.success ? '#0ECB81' : '#F6465D' }}>
-                {action.success ? (
-                  <Check className="w-3 h-3 inline" />
-                ) : (
-                  <X className="w-3 h-3 inline" />
+                <span
+                  className="px-2 py-0.5 rounded text-xs font-bold"
+                  style={
+                    action.action.includes('open')
+                      ? {
+                          background: 'rgba(96, 165, 250, 0.1)',
+                          color: '#60a5fa',
+                        }
+                      : {
+                          background: 'rgba(240, 185, 11, 0.1)',
+                          color: '#F0B90B',
+                        }
+                  }
+                >
+                  {action.action}
+                </span>
+                {action.leverage > 0 && (
+                  <span style={{ color: '#F0B90B' }}>{action.leverage}x</span>
                 )}
-              </span>
-              {action.error && (
-                <span className="text-xs ml-2" style={{ color: '#F6465D' }}>
-                  {action.error}
+                {action.price > 0 && (
+                  <span
+                    className="font-mono text-xs"
+                    style={{ color: '#848E9C' }}
+                  >
+                    @{action.price.toFixed(4)}
+                  </span>
+                )}
+                <span style={{ color: action.success ? '#0ECB81' : '#F6465D' }}>
+                  {action.success ? (
+                    <Check className="w-3 h-3 inline" />
+                  ) : (
+                    <X className="w-3 h-3 inline" />
+                  )}
                 </span>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+                {action.error && (
+                  <span className="text-xs ml-2" style={{ color: '#F6465D' }}>
+                    {action.error}
+                  </span>
+                )}
+                {(action.leader_equity ||
+                  action.follower_equity ||
+                  action.leader_margin_usd ||
+                  action.follower_margin_usd) && (
+                  <div className="flex flex-col gap-1 text-xs w-full mt-1">
+                    <div style={{ color: '#848E9C' }}>
+                      Leader: eq {action.leader_equity?.toFixed(2) ?? '--'} | mgn{' '}
+                      {action.leader_margin_usd?.toFixed(2) ?? '--'} | px{' '}
+                      {action.leader_price?.toFixed(4) ?? '--'}
+                    </div>
+                    <div style={{ color: '#848E9C' }}>
+                      Follower: eq {action.follower_equity?.toFixed(2) ?? '--'} | mgn{' '}
+                      {action.follower_margin_usd?.toFixed(2) ?? '--'} | ratio{' '}
+                      {action.copy_ratio ? `${action.copy_ratio.toFixed(0)}%` : '--'}{' '}
+                      {action.min_amount_applied ? '(min applied)' : ''}
+                      {action.max_amount_applied ? '(max applied)' : ''}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
 
       {/* Account State Summary */}
       {decision.account_state && (

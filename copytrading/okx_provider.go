@@ -136,6 +136,7 @@ func (p *okxProvider) fetchAndEmit(out chan<- Signal) error {
 				Symbol:         sym,
 				Action:         ActionCloseLong,
 				NotionalUSD:    math.Abs(prev) * price,
+				Price:          price,
 				LeaderEquity:   accountValue,
 				LeaderLeverage: meta.Leverage,
 				MarginMode:     meta.MarginMode,
@@ -148,6 +149,7 @@ func (p *okxProvider) fetchAndEmit(out chan<- Signal) error {
 				Symbol:         sym,
 				Action:         ActionOpenShort,
 				NotionalUSD:    math.Abs(meta.Size) * price,
+				Price:          price,
 				LeaderEquity:   accountValue,
 				LeaderLeverage: meta.Leverage,
 				MarginMode:     meta.MarginMode,
@@ -164,6 +166,7 @@ func (p *okxProvider) fetchAndEmit(out chan<- Signal) error {
 				Symbol:         sym,
 				Action:         ActionCloseShort,
 				NotionalUSD:    math.Abs(prev) * price,
+				Price:          price,
 				LeaderEquity:   accountValue,
 				LeaderLeverage: meta.Leverage,
 				MarginMode:     meta.MarginMode,
@@ -176,6 +179,7 @@ func (p *okxProvider) fetchAndEmit(out chan<- Signal) error {
 				Symbol:         sym,
 				Action:         ActionOpenLong,
 				NotionalUSD:    math.Abs(meta.Size) * price,
+				Price:          price,
 				LeaderEquity:   accountValue,
 				LeaderLeverage: meta.Leverage,
 				MarginMode:     meta.MarginMode,
@@ -193,15 +197,16 @@ func (p *okxProvider) fetchAndEmit(out chan<- Signal) error {
 			p.lastPositions[sym] = meta.Size
 			continue
 		}
-		out <- Signal{
-			Symbol:         sym,
-			Action:         action,
-			NotionalUSD:    math.Abs(delta) * price,
-			LeaderEquity:   accountValue,
-			LeaderLeverage: meta.Leverage,
-			MarginMode:     meta.MarginMode,
-			Timestamp:      time.Now(),
-			DeltaSize:      delta,
+	out <- Signal{
+		Symbol:         sym,
+		Action:         action,
+		NotionalUSD:    math.Abs(delta) * price,
+		Price:          price,
+		LeaderEquity:   accountValue,
+		LeaderLeverage: meta.Leverage,
+		MarginMode:     meta.MarginMode,
+		Timestamp:      time.Now(),
+		DeltaSize:      delta,
 			LeaderPosBefore: prev,
 			LeaderPosAfter:  meta.Size,
 		}

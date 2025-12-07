@@ -25,6 +25,7 @@ type Signal struct {
 	Symbol        string
 	Action        SignalAction
 	NotionalUSD   float64   // Absolute fill size in USD
+	Price         float64   // Leader fill price (if available)
 	LeaderEquity  float64   // Leader account equity at the moment of fill
 	LeaderLeverage int
 	MarginMode    string    // "cross" or "isolated"
