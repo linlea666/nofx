@@ -13,6 +13,7 @@ import (
 	"nofx/market"
 	"nofx/mcp"
 	"nofx/pool"
+	"nofx/logger"
 	"os"
 	"os/signal"
 	"strconv"
@@ -172,6 +173,12 @@ func main() {
 	configFile, err := loadConfigFile()
 	if err != nil {
 		log.Fatalf("❌ 读取config.json失败: %v", err)
+	}
+
+	// 初始化日志（带默认值）
+	if err := logger.InitFromLogConfig(configFile.Log); err != nil {
+		log.Printf("⚠️  初始化日志失败，使用默认info级别: %v", err)
+		_ = logger.InitWithSimpleConfig("info")
 	}
 
 	log.Printf("📋 初始化配置数据库: %s", dbPath)
